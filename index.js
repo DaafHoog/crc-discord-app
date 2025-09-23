@@ -130,12 +130,6 @@ app.post("/interactions", (req, res) => {
               "*Price: 2200R$*",
             inline: true
           },
-            {
-            name: "\u200B",
-            value:
-              "\u200B"
-            inline: false
-          },
           {
             name: "⚜️ - Ultimate Member",
             value:
@@ -245,5 +239,3 @@ app.post("/interactions", (req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`CRC interactions on :${port}`));
-
-
