@@ -52,12 +52,35 @@ app.post("/interactions", (req, res) => {
   // Dropdown handler
   if (body.type === 3 && body.data?.custom_id === "crc_tier_select") {
     const choice = body.data.values?.[0];
-    const text = {
-      platinum_mo: "**Platinum Monthly**: perks…",
-      platinum_lt: "**Platinum Lifetime**: perks…",
-      ultimate_mo: "**Ultimate**: perks…"
-    }[choice] || "Unknown option.";
+const text = {
+  platinum_mo: 
+    "**💎 Platinum Member (Monthly)**\n" +
+    "• Shout out\n" +
+    "• Role + Colour\n" +
+    "• Sneak Peeks\n" +
+    "• Platinum Chat\n" +
+    "• Platinum Call\n" +
+    "*Price: 200R$/month*",
 
+  platinum_lt: 
+    "**💎 Platinum Member (Lifetime)**\n" +
+    "• Shout out\n" +
+    "• Role + Colour\n" +
+    "• Sneak Peeks\n" +
+    "• Platinum Chat\n" +
+    "• Platinum Call\n" +
+    "*Price: 2200R$*",
+
+  ultimate_mo: 
+    "**✝️ Ultimate Member**\n" +
+    "• Shout out\n" +
+    "• Role + Colour\n" +
+    "• Sneak Peeks\n" +
+    "• Platinum Chat\n" +
+    "• Platinum Call\n" +
+    "• Extra Giveaways\n" +
+    "*Price: 400R$/month*"
+}[choice] || "Unknown option.";
     return res.json({
       type: 4,
       data: { content: text, flags: 64 }
@@ -69,3 +92,4 @@ app.post("/interactions", (req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Listening on :${port}`));
+
