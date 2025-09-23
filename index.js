@@ -126,7 +126,7 @@ app.post("/interactions", (req, res) => {
             // You asked for visible empty lines. Discord collapses pure empty lines sometimes;
             // using dashes keeps spacing readable.
             value:
-              "-\n-\n-\n-\n-\n" +
+              " \n \n \n \n \n \n" +
               "*Price: 2200R$*",
             inline: true
           },
@@ -140,7 +140,7 @@ app.post("/interactions", (req, res) => {
               "- Platinum **and** Ultimate Call\n" +
               "- Ultimate Giveaways\n" +
               "*Price: 400R$/month*",
-            inline: false
+            inline: true
           },
           {
             name: "🌟 - Server Booster",
@@ -150,7 +150,7 @@ app.post("/interactions", (req, res) => {
               "- Exclusive Sneak Peeks\n" +
               "- Platinum Chat\n" +
               "- Platinum Call",
-            inline: false
+            inline: true
           }
         ]
       },
@@ -239,3 +239,4 @@ app.post("/interactions", (req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`CRC interactions on :${port}`));
+
