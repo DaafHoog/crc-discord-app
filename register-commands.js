@@ -1,7 +1,6 @@
-// Runs once at startup (via package.json "start") to register /donate for your guild.
-const APP_ID   = process.env.DISCORD_APPLICATION_ID; // Application (Client) ID
-const GUILD_ID = process.env.DISCORD_GUILD_ID;       // Your server ID
-const TOKEN    = process.env.DISCORD_BOT_TOKEN;      // Bot token
+const APP_ID   = process.env.DISCORD_APPLICATION_ID;
+const GUILD_ID = process.env.DISCORD_GUILD_ID;
+const TOKEN    = process.env.DISCORD_BOT_TOKEN;
 
 if (!APP_ID || !GUILD_ID || !TOKEN) {
   console.error("Missing env vars. Need DISCORD_APPLICATION_ID, DISCORD_GUILD_ID, DISCORD_BOT_TOKEN");
@@ -9,7 +8,8 @@ if (!APP_ID || !GUILD_ID || !TOKEN) {
 }
 
 const commands = [
-  { name: "donate", description: "Show Code Red Creations info & categories" }
+  { name: "donate", description: "Show Code Red Creations info & categories" },
+  { name: "post_info", description: "Post the permanent info embeds in the configured channel (admin only)" }
 ];
 
 const url = `https://discord.com/api/v10/applications/${APP_ID}/guilds/${GUILD_ID}/commands`;
@@ -17,10 +17,7 @@ const url = `https://discord.com/api/v10/applications/${APP_ID}/guilds/${GUILD_I
 async function main() {
   const res = await fetch(url, {
     method: "PUT",
-    headers: {
-      "Authorization": `Bot ${TOKEN}`,
-      "Content-Type": "application/json"
-    },
+    headers: { "Authorization": `Bot ${TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify(commands)
   });
   const text = await res.text();
@@ -28,10 +25,7 @@ async function main() {
     console.error("Failed to register commands:", res.status, text);
     process.exit(1);
   }
-  console.log("Slash command registered:", text);
+  console.log("Slash commands registered:", text);
 }
 
-main().catch(err => {
-  console.error("Error registering commands:", err);
-  process.exit(1);
-});
+main().catch(err => { console.error("Error registering commands:", err); process.exit(1); });
