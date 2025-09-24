@@ -1,5 +1,7 @@
 import express from "express";
 import nacl from "tweetnacl";
+import { handleGiveawayCommand, handleGiveawayComponent, startGiveawayTicker } from "./src-giveaways.js";
+
 
 const app = express();
 
