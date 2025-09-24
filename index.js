@@ -27,8 +27,9 @@ function buildPublicContent() {
     embeds: [
       {
         color: 16711422, // #FEFEFE
-        image: { url: "https://ibb.co/h1709C07" } // public image URL
-      },
+        image: {
+          url: "https://media.discordapp.net/attachments/1197237670095622264/1420109288050790504/INFORMATION.png?ex=68d4dc16&is=68d38a96&hm=119947f3c99253d01ba484dca05d7249432edfb2c1f7073308919ea7bb869e5a&=&format=webp&quality=lossless&width=324&height=162"
+      }
       {
         color: 16711422,
         description: "Select a category from the dropdown to learn more about each category.",
@@ -222,3 +223,4 @@ app.post("/interactions", async (req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`CRC interactions on :${port}`));
+
