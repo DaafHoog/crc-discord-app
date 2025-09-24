@@ -12,7 +12,7 @@ const INFO_CHANNEL_ID = process.env.INFO_CHANNEL_ID;  // target #information cha
 
 // Keep raw body for signature verification
 app.use(express.json({
-  verify: (req, _res, buf) => { req.rawBody = buf; }
+  verify: (req, _res, buf) => { req.rawBody = buf; }  // needed for signature
 }));
 
 function isValidDiscordRequest(req) {
@@ -88,26 +88,38 @@ app.post("/interactions", async (req, res) => {
   if (!isValidDiscordRequest(req)) return res.status(401).send("Bad signature");
   const body = req.body;
   console.log("INT", { type: body.type, name: body.data?.name, custom_id: body.data?.custom_id });
+  try {
+    if (!isValidDiscordRequest(req)) {
+      console.error("SIGNATURE FAIL");
+      return res.status(401).send("Bad signature");
+    }
+  } catch (e) {
+    console.error("SIG CHECK ERROR", e);
+    return res.status(401).send("Bad signature");
+  }
 
-  
-  // PING
+const body = req.body;
+console.log("INT", { type: body.type, name: body.data?.name, custom_id: body.data?.custom_id });
+
+try {
+  // 1) PING
   if (body.type === 1) return res.json({ type: 1 });
 
-  // normalize the command name: lowercase + replace - or spaces with _
   const cmd = (body.data?.name || "").toLowerCase().replace(/[-\s]+/g, "_");
 
-  // ---- Giveaways: commands ----
+  // 2) Giveaways – commands first
   if (body.type === 2) {
     const ok = await handleGiveawayCommand(body, res, BOT_TOKEN);
-    if (ok) return; // <- important: stop here if giveaways responded
+    if (ok) return;
   }
 
-  // ---- Giveaways: components (buttons / modal submit) ----
+  // 3) Giveaways – components (buttons/modals)
   if (body.type === 3 || body.type === 5) {
     const ok = await handleGiveawayComponent(body, res, BOT_TOKEN);
-    if (ok) return; // <- important
+    if (ok) return;
   }
 
+  // 4) YOUR EXISTING COMMANDS (keep your logic here)
 
   // /post_info -> create a normal channel message and pin it
   if (body.type === 2 && cmd === "post_info") {
@@ -171,6 +183,9 @@ app.post("/interactions", async (req, res) => {
     const content = buildPublicContent();
     return res.json({ type: 4, data: { embeds: content.embeds, components: content.components } });
   }
+
+  // 5) YOUR EXISTING COMPONENTS (e.g., dropdown)
+
 
   // Dropdown -> EPHEMERAL embeds
   if (body.type === 3 && body.data?.custom_id === "crc_info_select") {
@@ -271,7 +286,15 @@ app.post("/interactions", async (req, res) => {
     return res.json({ type: 4, data: { flags: 64, embeds: [picked] } });
   }
 
-  return res.json({ type: 4, data: { content: "Unhandled.", flags: 64 } });
+  return res.json({ type: 4, data: { flags: 64, content: "Unhandled." } });
+
+  } catch (err) {
+    console.error("INT HANDLER ERROR", err);
+    // Always send something so Discord doesn't time out
+    try {
+      return res.json({ type: 4, data: { flags: 64, content: "Sorry, something went wrong." } });
+    } catch {}
+  }
 });
 
 const port = process.env.PORT || 3000;
