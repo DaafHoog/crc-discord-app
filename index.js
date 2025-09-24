@@ -96,6 +96,19 @@ app.post("/interactions", async (req, res) => {
   // normalize the command name: lowercase + replace - or spaces with _
   const cmd = (body.data?.name || "").toLowerCase().replace(/[-\s]+/g, "_");
 
+  // ---- Giveaways: commands ----
+  if (body.type === 2) {
+    const ok = await handleGiveawayCommand(body, res, BOT_TOKEN);
+    if (ok) return; // <- important: stop here if giveaways responded
+  }
+
+  // ---- Giveaways: components (buttons / modal submit) ----
+  if (body.type === 3 || body.type === 5) {
+    const ok = await handleGiveawayComponent(body, res, BOT_TOKEN);
+    if (ok) return; // <- important
+  }
+
+
   // /post_info -> create a normal channel message and pin it
   if (body.type === 2 && cmd === "post_info") {
     if (!BOT_TOKEN || !INFO_CHANNEL_ID) {
