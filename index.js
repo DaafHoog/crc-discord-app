@@ -1,13 +1,22 @@
 import express from "express";
 import nacl from "tweetnacl";
 import { handleGiveawayCommand, handleGiveawayComponent, startGiveawayTicker } from "./src-giveaways.js";
-
+import { startCleanupScheduler } from "./src-cleanup.js";
 
 const app = express();
 
 const PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY;
 const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;      // for posting/pinning
 const INFO_CHANNEL_ID = process.env.INFO_CHANNEL_ID;  // target #information channel id
+
+// ... all your routes and logic here ...
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`CRC interactions on :${port}`));
+
+// start background jobs
+startCleanupScheduler();
+startGiveawayTicker(BOT_TOKEN);
 
 // Keep raw body for signature verification
 app.use(express.json({
