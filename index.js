@@ -2,10 +2,12 @@ import express from "express";
 import nacl from "tweetnacl";
 
 const app = express();
-const PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY;
-const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;      // NEW: for posting/pinning
-const INFO_CHANNEL_ID = process.env.INFO_CHANNEL_ID;  // NEW: target #information channel id
 
+const PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY;
+const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;      // for posting/pinning
+const INFO_CHANNEL_ID = process.env.INFO_CHANNEL_ID;  // target #information channel id
+
+// Keep raw body for signature verification
 app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; }
 }));
@@ -30,15 +32,31 @@ function buildPublicContent() {
         image: {
           url: "https://media.discordapp.net/attachments/1197237670095622264/1420109288050790504/INFORMATION.png?ex=68d4dc16&is=68d38a96&hm=119947f3c99253d01ba484dca05d7249432edfb2c1f7073308919ea7bb869e5a&=&format=webp&quality=lossless&width=324&height=162"
         }
-      }
+      },
       {
         color: 16711422,
         description: "Select a category from the dropdown to learn more about each category.",
         fields: [
-          { name: "Donation information", value: "Information about the perks and costs of donation to Code Red Creations", inline: false },
-          { name: "Applying for a Staff or Developer position.", value: "Information about the requirements for applying and more.", inline: false },
-          { name: "Products Information", value: "Information about the products we sell at Code Red Creations.", inline: false },
-          { name: "Affiliation Information", value: "Information about perks and requirements to affiliate with Code Red Creations.", inline: false }
+          {
+            name: "Donation information",
+            value: "Information about the perks and costs of donation to Code Red Creations",
+            inline: false
+          },
+          {
+            name: "Applying for a Staff or Developer position.",
+            value: "Information about the requirements for applying and more.",
+            inline: false
+          },
+          {
+            name: "Products Information",
+            value: "Information about the products we sell at Code Red Creations.",
+            inline: false
+          },
+          {
+            name: "Affiliation Information",
+            value: "Information about perks and requirements to affiliate with Code Red Creations.",
+            inline: false
+          }
         ]
       }
     ],
@@ -70,9 +88,7 @@ app.post("/interactions", async (req, res) => {
   // PING
   if (body.type === 1) return res.json({ type: 1 });
 
-  // ------------------------------
-  // /post_info -> create a normal channel message (no banner) and pin it
-  // ------------------------------
+  // /post_info -> create a normal channel message (no slash-command banner) and pin it
   if (body.type === 2 && body.data?.name === "post_info") {
     if (!BOT_TOKEN || !INFO_CHANNEL_ID) {
       return res.json({
@@ -99,34 +115,43 @@ app.post("/interactions", async (req, res) => {
       },
       body: JSON.stringify({ embeds: content.embeds, components: content.components })
     });
-    const posted = await postRes.json();
+
+    let pinned = false;
+    let posted;
+    try {
+      posted = await postRes.json();
+    } catch {
+      // ignore JSON errors; we'll still ACK ephemerally
+    }
 
     // Try to pin (requires Manage Messages). Ignore failures.
     try {
-      await fetch(`https://discord.com/api/v10/channels/${INFO_CHANNEL_ID}/pins/${posted.id}`, {
-        method: "PUT",
-        headers: { "Authorization": `Bot ${BOT_TOKEN}` }
-      });
+      if (posted?.id) {
+        const pinRes = await fetch(`https://discord.com/api/v10/channels/${INFO_CHANNEL_ID}/pins/${posted.id}`, {
+          method: "PUT",
+          headers: { "Authorization": `Bot ${BOT_TOKEN}` }
+        });
+        pinned = pinRes.ok;
+      }
     } catch {}
 
     // Ephemeral ack
     return res.json({
       type: 4,
-      data: { flags: 64, content: `Posted${postRes.ok ? " and pinned" : ""} in <#${INFO_CHANNEL_ID}>.` }
+      data: {
+        flags: 64,
+        content: `Posted${pinned ? " and pinned" : ""} in <#${INFO_CHANNEL_ID}>.`
+      }
     });
   }
 
-  // ------------------------------
-  // /donate -> (keep your original preview as a normal interaction reply)
-  // ------------------------------
+  // /donate -> preview as a normal interaction reply (optional to keep)
   if (body.type === 2 && body.data?.name === "donate") {
     const content = buildPublicContent();
     return res.json({ type: 4, data: { embeds: content.embeds, components: content.components } });
   }
 
-  // ------------------------------
-  // Dropdown -> EPHEMERAL embeds (unchanged)
-  // ------------------------------
+  // Dropdown -> EPHEMERAL embeds
   if (body.type === 3 && body.data?.custom_id === "crc_info_select") {
     const key = body.data.values?.[0];
 
@@ -224,5 +249,3 @@ app.post("/interactions", async (req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`CRC interactions on :${port}`));
-
-
