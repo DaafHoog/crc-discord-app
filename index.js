@@ -18,9 +18,17 @@ app.use(express.json({
 function isValidDiscordRequest(req) {
   const signature = req.get("X-Signature-Ed25519");
   const timestamp = req.get("X-Signature-Timestamp");
-  if (!signature || !timestamp) return false;
+  if (!signature || !timestamp || !req.rawBody) return false;
+
+  // IMPORTANT: concat bytes, not strings
+  const timestampBytes = Buffer.from(timestamp, "utf8");
+  const bodyBytes = Buffer.isBuffer(req.rawBody)
+    ? req.rawBody
+    : Buffer.from(req.rawBody, "utf8");
+  const message = Buffer.concat([timestampBytes, bodyBytes]);
+
   return nacl.sign.detached.verify(
-    Buffer.from(timestamp + req.rawBody),
+    message,
     Buffer.from(signature, "hex"),
     Buffer.from(PUBLIC_KEY, "hex")
   );
@@ -100,22 +108,27 @@ app.post("/interactions", async (req, res) => {
   console.log("INT", { type: body.type, name: body.data?.name, custom_id: body.data?.custom_id });
 
   try {
-    // 1) PING
-    if (body.type === 1) return res.json({ type: 1 });
+    if (body.type === 1) return res.json({ type: 1 }); // PING
 
     const cmd = (body.data?.name || "").toLowerCase().replace(/[-\s]+/g, "_");
 
-    // 2) Giveaways – commands first
-    if (body.type === 2) {
-      const ok = await handleGiveawayCommand(body, res, BOT_TOKEN);
-      if (ok) return;
+    // TEMP PROOF: reply fast for /gstart
+    if (body.type === 2 && cmd === "gstart") {
+      return res.json({ type: 4, data: { flags: 64, content: "Router OK – modal next." } });
     }
 
-    // 3) Giveaways – components
-    if (body.type === 3 || body.type === 5) {
-      const ok = await handleGiveawayComponent(body, res, BOT_TOKEN);
-      if (ok) return;
+    // Giveaways (when temp is removed)
+    if (body.type === 2) {
+      const payload = await handleGiveawayCommand(body, BOT_TOKEN);
+      if (payload) return res.json(payload);
     }
+    if (body.type === 3 || body.type === 5) {
+      const payload = await handleGiveawayComponent(body, BOT_TOKEN);
+      if (payload) return res.json(payload);
+    }
+
+    // ... your /post_info, /donate, select menu handlers ...
+
 
     // 4) /post_info command
     if (body.type === 2 && cmd === "post_info") {
@@ -215,9 +228,10 @@ app.post("/interactions", async (req, res) => {
     }
 
     // Fallback
-    return res.json({ type: 4, data: { flags: 64, content: "Unhandled." } });
+      return res.json({ type: 4, data: { flags: 64, content: "Unhandled." } });
 
   } catch (err) {
+    // ===== and this catch belongs right after fallback =====
     console.error("INT HANDLER ERROR", err);
     try {
       return res.json({ type: 4, data: { flags: 64, content: "Sorry, something went wrong." } });
