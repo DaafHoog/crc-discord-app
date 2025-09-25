@@ -112,11 +112,6 @@ app.post("/interactions", async (req, res) => {
 
     const cmd = (body.data?.name || "").toLowerCase().replace(/[-\s]+/g, "_");
 
-    // TEMP PROOF: reply fast for /gstart
-    if (body.type === 2 && cmd === "gstart") {
-      return res.json({ type: 4, data: { flags: 64, content: "Router OK – modal next." } });
-    }
-
     // Giveaways (when temp is removed)
     if (body.type === 2) {
       const payload = await handleGiveawayCommand(body, BOT_TOKEN);
