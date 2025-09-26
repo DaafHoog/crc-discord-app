@@ -321,16 +321,26 @@ app.post("/interactions", async (req, res) => {
             custom_id: "gstart_modal",
             title: "Create Giveaway",
             components: [
-              { type: 1, components: [{ type: 4, custom_id: "prize",       label: "Prize",                  style: 1, required: true,  max_length: 100 }] },
-              { type: 1, components: [{ type: 4, custom_id: "title",       label: "Title (optional)",       style: 1, required: false, max_length: 100 }] },
-              { type: 1, components: [{ type: 4, custom_id: "description", label: "Description (optional)",  style: 2, required: false, max_length: 1000 }] },
-              { type: 1, components: [{ type: 4, custom_id: "duration",    label: "Duration (e.g. 1h)",     style: 1, required: true }] },
-              { type: 1, components: [{ type: 4, custom_id: "winners",     label: "Winners (default 1)",    style: 1, required: false }] },
-              { type: 1, components: [{ type: 4, custom_id: "host_id",     label: "Host ID (optional)",     style: 1, required: false }] },
+              { type: 1, components: [
+                { type: 4, custom_id: "prize", label: "Prize", style: 1, required: true, max_length: 100 }
+              ]},
+             { type: 1, components: [
+                { type: 4, custom_id: "duration", label: "Duration (e.g. 1h, 2d, 45m)", style: 1, required: true }
+              ]},
+              { type: 1, components: [
+                { type: 4, custom_id: "winners", label: "Winners (default 1)", style: 1, required: false }
+              ]},
+              { type: 1, components: [
+                { type: 4, custom_id: "title", label: "Title (optional)", style: 1, required: false, max_length: 100 }
+              ]},
+              { type: 1, components: [
+                { type: 4, custom_id: "description", label: "Description (optional)", style: 2, required: false, max_length: 1000 }
+              ]},
             ],
           },
-        });
+       });
       }
+
 
       // /post_info
       if (cmd === "post_info") {
