@@ -1,31 +1,66 @@
+// index.js — all-in-one (Express + Discord verify + Giveaways + DB + Cleanup)
+
 import express from "express";
 import nacl from "tweetnacl";
-import { handleGiveawayCommand, handleGiveawayComponent, startGiveawayTicker } from "./src-giveaways.js";
-import { startCleanupScheduler } from "./src-cleanup.js";
+import pg from "pg";
+const { Pool } = pg;
 
+/* =========================
+   Env & constants
+   ========================= */
+const PUBLIC_KEY     = process.env.DISCORD_PUBLIC_KEY;
+const BOT_TOKEN      = process.env.DISCORD_BOT_TOKEN;
+const INFO_CHANNEL_ID= process.env.INFO_CHANNEL_ID;
+const DATABASE_URL   = process.env.DATABASE_URL;
+
+// Giveaways config
+const DEF_WINNERS    = Number(process.env.G_DEFAULT_WINNERS ?? 1);
+const DEF_DURATION   = String(process.env.G_DEFAULT_DURATION ?? "1h");
+const ENTER_ROLE     = process.env.G_GIVEAWAY_ROLE_ID || null; // optional role required to join
+
+// Cleanup config
+const RETENTION_DAYS = Math.max(1, parseInt(process.env.G_RETENTION_DAYS || "7", 10));
+const ONE_DAY_MS     = 24 * 60 * 60 * 1000;
+const JITTER_MS      = Math.floor(Math.random() * 5 * 60 * 1000); // 0–5 min random delay
+
+/* =========================
+   Postgres (pooled)
+   ========================= */
+if (!DATABASE_URL) {
+  console.warn("[db] DATABASE_URL is missing! Set to your External connection string.");
+}
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_URL?.includes(".render.com")
+    ? { rejectUnauthorized: false }
+    : undefined,
+});
+
+async function query(text, params) {
+  const res = await pool.query(text, params);
+  return res;
+}
+
+/* =========================
+   Helpers
+   ========================= */
 const app = express();
 
-const PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY;
-const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;      // for posting/pinning
-const INFO_CHANNEL_ID = process.env.INFO_CHANNEL_ID;  // target #information channel id
-
-// Keep raw body for signature verification
+// keep raw body for signature verification
 app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; }
 }));
 
-// Verify Discord signatures
 function isValidDiscordRequest(req) {
   const signature = req.get("X-Signature-Ed25519");
   const timestamp = req.get("X-Signature-Timestamp");
   if (!signature || !timestamp || !req.rawBody) return false;
 
-  // IMPORTANT: concat bytes, not strings
-  const timestampBytes = Buffer.from(timestamp, "utf8");
-  const bodyBytes = Buffer.isBuffer(req.rawBody)
-    ? req.rawBody
-    : Buffer.from(req.rawBody, "utf8");
-  const message = Buffer.concat([timestampBytes, bodyBytes]);
+  // concat bytes (not strings)
+  const message = Buffer.concat([
+    Buffer.from(timestamp, "utf8"),
+    Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(req.rawBody, "utf8")
+  ]);
 
   return nacl.sign.detached.verify(
     message,
@@ -34,7 +69,20 @@ function isValidDiscordRequest(req) {
   );
 }
 
-// Build the public embeds + dropdown (for /post_info and /donate)
+function parseDuration(str) {
+  if (!str) return null;
+  const re = /(\d+)\s*(d|h|m|s)/gi;
+  const mult = { d: 86400000, h: 3600000, m: 60000, s: 1000 };
+  let ms = 0, m;
+  while ((m = re.exec(str))) ms += Number(m[1]) * mult[m[2].toLowerCase()];
+  return ms > 0 ? ms : null;
+}
+
+const ts = (date) => `<t:${Math.floor(date.getTime() / 1000)}:R>`;
+
+/* =========================
+   Info embeds (public)
+   ========================= */
 function buildPublicContent() {
   return {
     embeds: [
@@ -48,26 +96,10 @@ function buildPublicContent() {
         color: 16711422,
         description: "Select a category from the dropdown to learn more about each category.",
         fields: [
-          {
-            name: "Donation information",
-            value: "Information about the perks and costs of donation to Code Red Creations",
-            inline: false
-          },
-          {
-            name: "Applying for a Staff or Developer position.",
-            value: "Information about the requirements for applying and more.",
-            inline: false
-          },
-          {
-            name: "Products Information",
-            value: "Information about the products we sell at Code Red Creations.",
-            inline: false
-          },
-          {
-            name: "Affiliation Information",
-            value: "Information about perks and requirements to affiliate with Code Red Creations.",
-            inline: false
-          }
+          { name: "Donation information", value: "Information about the perks and costs of donation to Code Red Creations", inline: false },
+          { name: "Applying for a Staff or Developer position.", value: "Information about the requirements for applying and more.", inline: false },
+          { name: "Products Information", value: "Information about the products we sell at Code Red Creations.", inline: false },
+          { name: "Affiliation Information", value: "Information about perks and requirements to affiliate with Code Red Creations.", inline: false }
         ]
       }
     ],
@@ -92,8 +124,171 @@ function buildPublicContent() {
   };
 }
 
-// Main interaction handler
+/* =========================
+   Giveaways (inline)
+   ========================= */
+function buildGiveawayEmbed(g) {
+  return {
+    title: `🎉 Giveaway: ${g.prize}`,
+    description:
+      (g.title ? `**${g.title}**\n` : "") +
+      (g.description ? `${g.description}\n\n` : "") +
+      `Ends ${ts(new Date(g.ends_at))}\n` +
+      `Winners: **${g.winners}**` +
+      (ENTER_ROLE ? `\nRequirement: <@&${ENTER_ROLE}>` : "") +
+      (g.host_id ? `\nHost: <@${g.host_id}>` : ""),
+  };
+}
+
+// /gstart -> return modal payload
+async function giveawaysSlash(body) {
+  const name = (body.data?.name || "").toLowerCase().replace(/[-\s]+/g, "_");
+  if (name !== "gstart") return null;
+
+  return {
+    type: 9,
+    data: {
+      custom_id: "gstart_modal",
+      title: "Create Giveaway",
+      components: [
+        { type: 1, components: [{ type: 4, custom_id: "prize",       label: "Prize",                  style: 1, required: true,  max_length: 100 }] },
+        { type: 1, components: [{ type: 4, custom_id: "title",       label: "Title (optional)",       style: 1, required: false, max_length: 100 }] },
+        { type: 1, components: [{ type: 4, custom_id: "description", label: "Description (optional)",  style: 2, required: false, max_length: 1000 }] },
+        { type: 1, components: [{ type: 4, custom_id: "duration",    label: `Duration (e.g. ${DEF_DURATION})`, style: 1, required: true }] },
+        { type: 1, components: [{ type: 4, custom_id: "winners",     label: `Winners (default ${DEF_WINNERS})`, style: 1, required: false }] },
+        { type: 1, components: [{ type: 4, custom_id: "host_id",     label: "Host ID (optional)",      style: 1, required: false }] },
+      ],
+    },
+  };
+}
+
+// Modal submit + join button -> return payloads
+async function giveawaysComponents(body) {
+  // Modal submit -> create giveaway
+  if (body.type === 5 && body.data?.custom_id === "gstart_modal") {
+    try {
+      const kv = Object.fromEntries(
+        (body.data.components || [])
+          .flatMap(r => r.components || [])
+          .map(c => [c.custom_id, (c.value ?? "").trim()])
+      );
+
+      const prize       = kv.prize;
+      const title       = kv.title || null;
+      const description = kv.description || null;
+      const winners     = Math.max(1, Number(kv.winners || DEF_WINNERS));
+      const host_id     = kv.host_id || null;
+      const durMs       = parseDuration(kv.duration || DEF_DURATION);
+
+      if (!prize || !durMs) {
+        return { type: 4, data: { flags: 64, content: "Invalid form: need Prize and valid Duration (e.g. `1h 30m`, `2d`)." } };
+      }
+
+      const endsAt = new Date(Date.now() + durMs);
+
+      // Insert giveaway (message_id later)
+      const ins = await query(
+        `INSERT INTO giveaways
+           (guild_id, channel_id, prize, title, description, winners, host_id, created_by, ends_at, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'running')
+         RETURNING id, ends_at`,
+        [
+          String(body.guild_id),
+          String(body.channel_id),
+          prize, title, description,
+          winners, host_id,
+          String(body.member?.user?.id || body.user?.id),
+          endsAt.toISOString()
+        ]
+      );
+
+      const g = {
+        id: ins.rows[0].id,
+        prize, title, description, winners, host_id,
+        ends_at: ins.rows[0].ends_at
+      };
+
+      // Post public message with Join button
+      const postRes = await fetch(`https://discord.com/api/v10/channels/${body.channel_id}/messages`, {
+        method: "POST",
+        headers: { "Authorization": `Bot ${BOT_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          embeds: [ buildGiveawayEmbed(g) ],
+          components: [{ type: 1, components: [{ type: 2, style: 1, label: "Join 🎉", custom_id: `g_join:${g.id}` }]}]
+        })
+      });
+
+      const posted = await postRes.json().catch(() => null);
+      if (!postRes.ok) {
+        return { type: 4, data: { flags: 64, content: `Couldn't post giveaway (HTTP ${postRes.status}).` } };
+      }
+
+      // Save message id
+      await query(`UPDATE giveaways SET message_id=$1 WHERE id=$2`, [posted.id, g.id]);
+
+      return { type: 4, data: { flags: 64, content: `Giveaway created (ends ${ts(new Date(g.ends_at))}).` } };
+    } catch (err) {
+      console.error("[gstart_modal] error:", err);
+      return { type: 4, data: { flags: 64, content: "Could not create the giveaway (error)." } };
+    }
+  }
+
+  // Join button
+  if (body.type === 3 && body.data?.custom_id?.startsWith("g_join:")) {
+    try {
+      const giveawayId = body.data.custom_id.split(":")[1];
+      const userId     = String(body.member?.user?.id || body.user?.id);
+
+      if (ENTER_ROLE) {
+        const roles = body.member?.roles || [];
+        if (!roles.includes(ENTER_ROLE)) {
+          return { type: 4, data: { flags: 64, content: `You need <@&${ENTER_ROLE}> to join this giveaway.` } };
+        }
+      }
+
+      await query(`INSERT INTO giveaway_entries (giveaway_id, user_id) VALUES ($1,$2)`, [giveawayId, userId]);
+      return { type: 4, data: { flags: 64, content: "✅ You joined!" } };
+    } catch {
+      // unique violation = already joined
+      return { type: 4, data: { flags: 64, content: "You're already in." } };
+    }
+  }
+
+  return null;
+}
+
+/* =========================
+   Cleanup (inline)
+   ========================= */
+async function runCleanup() {
+  try {
+    // delete non-running giveaways older than RETENTION_DAYS
+    const del = await query(
+      `DELETE FROM giveaways
+        WHERE status <> 'running'
+          AND ends_at < NOW() - make_interval(days => $1::int)`,
+      [RETENTION_DAYS]
+    );
+    if (del.rowCount) {
+      console.log(`[cleanup] deleted ${del.rowCount} old giveaways (entries removed via CASCADE)`);
+    }
+  } catch (err) {
+    console.error("[cleanup] error:", err);
+  }
+}
+function startCleanupScheduler() {
+  // once on boot + daily
+  setTimeout(() => {
+    runCleanup().catch(() => {});
+    setInterval(() => runCleanup().catch(() => {}), ONE_DAY_MS);
+  }, JITTER_MS);
+}
+
+/* =========================
+   Interactions route
+   ========================= */
 app.post("/interactions", async (req, res) => {
+  // signature
   try {
     if (!isValidDiscordRequest(req)) {
       console.error("SIGNATURE FAIL");
@@ -108,50 +303,42 @@ app.post("/interactions", async (req, res) => {
   console.log("INT", { type: body.type, name: body.data?.name, custom_id: body.data?.custom_id });
 
   try {
-    if (body.type === 1) return res.json({ type: 1 }); // PING
+    // PING
+    if (body.type === 1) return res.json({ type: 1 });
 
     const cmd = (body.data?.name || "").toLowerCase().replace(/[-\s]+/g, "_");
 
-    // Giveaways (when temp is removed)
+    // Giveaways (slash)
     if (body.type === 2) {
-      const payload = await handleGiveawayCommand(body, BOT_TOKEN);
+      const payload = await giveawaysSlash(body);
       if (payload) return res.json(payload);
     }
+
+    // Giveaways (components)
     if (body.type === 3 || body.type === 5) {
-      const payload = await handleGiveawayComponent(body, BOT_TOKEN);
+      const payload = await giveawaysComponents(body);
       if (payload) return res.json(payload);
     }
 
-    // ... your /post_info, /donate, select menu handlers ...
-
-
-    // 4) /post_info command
+    // /post_info (post & pin)
     if (body.type === 2 && cmd === "post_info") {
       if (!BOT_TOKEN || !INFO_CHANNEL_ID) {
-        return res.json({
-          type: 4,
-          data: { flags: 64, content: "Missing BOT token or INFO_CHANNEL_ID env vars on the server." }
-        });
+        return res.json({ type: 4, data: { flags: 64, content: "Missing BOT token or INFO_CHANNEL_ID." } });
       }
-
       const perms = body.member?.permissions ?? "0";
       const isAdmin = (BigInt(perms) & (1n << 3n)) !== 0n; // ADMINISTRATOR
       if (!isAdmin) {
         return res.json({ type: 4, data: { flags: 64, content: "Only admins can run this." } });
       }
-
       const content = buildPublicContent();
-
       const postRes = await fetch(`https://discord.com/api/v10/channels/${INFO_CHANNEL_ID}/messages`, {
         method: "POST",
         headers: { "Authorization": `Bot ${BOT_TOKEN}`, "Content-Type": "application/json" },
         body: JSON.stringify({ embeds: content.embeds, components: content.components })
       });
-
       let pinned = false;
-      let posted;
+      let posted = null;
       try { posted = await postRes.json(); } catch {}
-
       try {
         if (posted?.id) {
           const pinRes = await fetch(`https://discord.com/api/v10/channels/${INFO_CHANNEL_ID}/pins/${posted.id}`, {
@@ -161,23 +348,18 @@ app.post("/interactions", async (req, res) => {
           pinned = pinRes.ok;
         }
       } catch {}
-
-      return res.json({
-        type: 4,
-        data: { flags: 64, content: `Posted${pinned ? " and pinned" : ""} in <#${INFO_CHANNEL_ID}>.` }
-      });
+      return res.json({ type: 4, data: { flags: 64, content: `Posted${pinned ? " and pinned" : ""} in <#${INFO_CHANNEL_ID}>.` } });
     }
 
-    // 5) /donate command
+    // /donate preview
     if (body.type === 2 && body.data?.name === "donate") {
       const content = buildPublicContent();
       return res.json({ type: 4, data: { embeds: content.embeds, components: content.components } });
     }
 
-    // 6) Dropdown select
+    // Dropdown -> ephemeral embeds
     if (body.type === 3 && body.data?.custom_id === "crc_info_select") {
       const key = body.data.values?.[0];
-
       const embedByKey = {
         donation_info: {
           color: 16711422,
@@ -217,16 +399,13 @@ app.post("/interactions", async (req, res) => {
           ]
         }
       };
-
       const picked = embedByKey[key] ?? { color: 16711422, title: "Unknown", description: "This option is not configured." };
       return res.json({ type: 4, data: { flags: 64, embeds: [picked] } });
     }
 
-    // Fallback
-      return res.json({ type: 4, data: { flags: 64, content: "Unhandled." } });
-
+    // fallback
+    return res.json({ type: 4, data: { flags: 64, content: "Unhandled." } });
   } catch (err) {
-    // ===== and this catch belongs right after fallback =====
     console.error("INT HANDLER ERROR", err);
     try {
       return res.json({ type: 4, data: { flags: 64, content: "Sorry, something went wrong." } });
@@ -234,10 +413,11 @@ app.post("/interactions", async (req, res) => {
   }
 });
 
-// Start server
+/* =========================
+   Boot
+   ========================= */
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`CRC interactions on :${port}`));
 
-// Background jobs
+// background cleanup
 startCleanupScheduler();
-startGiveawayTicker(BOT_TOKEN);
