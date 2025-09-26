@@ -4,7 +4,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node register-commands.js && node index.js"
+    "start": "node index.js",
+    "register": "node register-commands.js"
   },
   "dependencies": {
     "express": "^4.18.2",

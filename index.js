@@ -288,7 +288,7 @@ function startCleanupScheduler() {
    Interactions route
    ========================= */
 app.post("/interactions", async (req, res) => {
-  // signature
+  // 1) Verify signature
   try {
     if (!isValidDiscordRequest(req)) {
       console.error("SIGNATURE FAIL");
@@ -303,61 +303,79 @@ app.post("/interactions", async (req, res) => {
   console.log("INT", { type: body.type, name: body.data?.name, custom_id: body.data?.custom_id });
 
   try {
-    // PING
-    if (body.type === 1) return res.json({ type: 1 });
+    // 2) PING
+    if (body.type === 1) {
+      return res.json({ type: 1 });
+    }
 
-    const cmd = (body.data?.name || "").toLowerCase().replace(/[-\s]+/g, "_");
-
-    // Giveaways (slash)
+    // 3) Slash commands
     if (body.type === 2) {
-      const payload = await giveawaysSlash(body);
-      if (payload) return res.json(payload);
-    }
+      const cmd = (body.data?.name || "").toLowerCase().replace(/[-\s]+/g, "_");
 
-    // Giveaways (components)
-    if (body.type === 3 || body.type === 5) {
-      const payload = await giveawaysComponents(body);
-      if (payload) return res.json(payload);
-    }
+      // Force an immediate modal for /gstart (no DB, no helpers) to eliminate timeouts.
+      if (cmd === "gstart") {
+        console.log("GSTART: sending modal");
+        return res.json({
+          type: 9, // MODAL
+          data: {
+            custom_id: "gstart_modal",
+            title: "Create Giveaway",
+            components: [
+              { type: 1, components: [{ type: 4, custom_id: "prize",       label: "Prize",                  style: 1, required: true,  max_length: 100 }] },
+              { type: 1, components: [{ type: 4, custom_id: "title",       label: "Title (optional)",       style: 1, required: false, max_length: 100 }] },
+              { type: 1, components: [{ type: 4, custom_id: "description", label: "Description (optional)",  style: 2, required: false, max_length: 1000 }] },
+              { type: 1, components: [{ type: 4, custom_id: "duration",    label: "Duration (e.g. 1h)",     style: 1, required: true }] },
+              { type: 1, components: [{ type: 4, custom_id: "winners",     label: "Winners (default 1)",    style: 1, required: false }] },
+              { type: 1, components: [{ type: 4, custom_id: "host_id",     label: "Host ID (optional)",     style: 1, required: false }] },
+            ],
+          },
+        });
+      }
 
-    // /post_info (post & pin)
-    if (body.type === 2 && cmd === "post_info") {
-      if (!BOT_TOKEN || !INFO_CHANNEL_ID) {
-        return res.json({ type: 4, data: { flags: 64, content: "Missing BOT token or INFO_CHANNEL_ID." } });
-      }
-      const perms = body.member?.permissions ?? "0";
-      const isAdmin = (BigInt(perms) & (1n << 3n)) !== 0n; // ADMINISTRATOR
-      if (!isAdmin) {
-        return res.json({ type: 4, data: { flags: 64, content: "Only admins can run this." } });
-      }
-      const content = buildPublicContent();
-      const postRes = await fetch(`https://discord.com/api/v10/channels/${INFO_CHANNEL_ID}/messages`, {
-        method: "POST",
-        headers: { "Authorization": `Bot ${BOT_TOKEN}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ embeds: content.embeds, components: content.components })
-      });
-      let pinned = false;
-      let posted = null;
-      try { posted = await postRes.json(); } catch {}
-      try {
-        if (posted?.id) {
-          const pinRes = await fetch(`https://discord.com/api/v10/channels/${INFO_CHANNEL_ID}/pins/${posted.id}`, {
-            method: "PUT",
-            headers: { "Authorization": `Bot ${BOT_TOKEN}` }
-          });
-          pinned = pinRes.ok;
+      // /post_info
+      if (cmd === "post_info") {
+        if (!BOT_TOKEN || !INFO_CHANNEL_ID) {
+          return res.json({ type: 4, data: { flags: 64, content: "Missing BOT token or INFO_CHANNEL_ID." } });
         }
-      } catch {}
-      return res.json({ type: 4, data: { flags: 64, content: `Posted${pinned ? " and pinned" : ""} in <#${INFO_CHANNEL_ID}>.` } });
+        // admin check
+        const perms = body.member?.permissions ?? "0";
+        const isAdmin = (BigInt(perms) & (1n << 3n)) !== 0n;
+        if (!isAdmin) {
+          return res.json({ type: 4, data: { flags: 64, content: "Only admins can run this." } });
+        }
+
+        const content = buildPublicContent();
+        const postRes = await fetch(`https://discord.com/api/v10/channels/${INFO_CHANNEL_ID}/messages`, {
+          method: "POST",
+          headers: { "Authorization": `Bot ${BOT_TOKEN}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ embeds: content.embeds, components: content.components })
+        });
+
+        let pinned = false;
+        let posted = null;
+        try { posted = await postRes.json(); } catch {}
+        try {
+          if (posted?.id) {
+            const pinRes = await fetch(`https://discord.com/api/v10/channels/${INFO_CHANNEL_ID}/pins/${posted.id}`, {
+              method: "PUT",
+              headers: { "Authorization": `Bot ${BOT_TOKEN}` }
+            });
+            pinned = pinRes.ok;
+          }
+        } catch {}
+
+        return res.json({ type: 4, data: { flags: 64, content: `Posted${pinned ? " and pinned" : ""} in <#${INFO_CHANNEL_ID}>.` } });
+      }
+
+      // /donate
+      if (cmd === "donate") {
+        const content = buildPublicContent();
+        return res.json({ type: 4, data: { embeds: content.embeds, components: content.components } });
+      }
     }
 
-    // /donate preview
-    if (body.type === 2 && body.data?.name === "donate") {
-      const content = buildPublicContent();
-      return res.json({ type: 4, data: { embeds: content.embeds, components: content.components } });
-    }
-
-    // Dropdown -> ephemeral embeds
+    // 4) Components
+    // Dropdown -> ephemeral info
     if (body.type === 3 && body.data?.custom_id === "crc_info_select") {
       const key = body.data.values?.[0];
       const embedByKey = {
@@ -369,10 +387,10 @@ app.post("/interactions", async (req, res) => {
             "[Code Red Creations - Roblox Group](https://www.roblox.com/share/g/70326561)\n" +
             "*Create a ticket to aquire your role.*",
           fields: [
-            { name: "💎 - Platinum Member", value: "- Shout out\n- Role + Colour\n- Exclusive Sneak Peeks\n- Platinum Chat\n- Platinum Call\n*Price: 200R$/month*", inline: true },
-            { name: "💎 - Platinum Member (Lifetime)", value: "- Shout out\n- Role + Colour\n- Exclusive Sneak Peeks\n- Platinum Chat\n- Platinum Call\n*Price: 2200R$*", inline: true },
-            { name: "⚜️ - Ultimate Member", value: "- Shout out\n- Role + Colour\n- Exclusive Sneak Peeks\n- Platinum **and** Ultimate Chat\n- Platinum **and** Ultimate Call\n- Ultimate Giveaways\n*Price: 400R$/month*", inline: true },
-            { name: "🌟 - Server Booster", value: "- Shout out\n- Role + Colour\n- Exclusive Sneak Peeks\n- Platinum Chat\n- Platinum Call", inline: true }
+            { name: "💎 - Platinum Member",             value: "- Shout out\n- Role + Colour\n- Exclusive Sneak Peeks\n- Platinum Chat\n- Platinum Call\n*Price: 200R$/month*", inline: true },
+            { name: "💎 - Platinum Member (Lifetime)",  value: "- Shout out\n- Role + Colour\n- Exclusive Sneak Peeks\n- Platinum Chat\n- Platinum Call\n*Price: 2200R$*", inline: true },
+            { name: "⚜️ - Ultimate Member",             value: "- Shout out\n- Role + Colour\n- Exclusive Sneak Peeks\n- Platinum **and** Ultimate Chat\n- Platinum **and** Ultimate Call\n- Ultimate Giveaways\n*Price: 400R$/month*", inline: true },
+            { name: "🌟 - Server Booster",               value: "- Shout out\n- Role + Colour\n- Exclusive Sneak Peeks\n- Platinum Chat\n- Platinum Call", inline: true }
           ]
         },
         applying_info: {
@@ -381,7 +399,7 @@ app.post("/interactions", async (req, res) => {
           description: "At Code Red Creations, we’re looking for active UGC developers and, from time to time, new staff members to strengthen our team.",
           fields: [
             { name: "Applying for the Staff Team", value: "Help enforce rules and support members.\n\nKeep an eye on announcements for openings!", inline: false },
-            { name: "Applying for UGC Developer", value: "We’re always looking for active and experienced UGC creators.\n\nOpen a ticket and share your portfolio!", inline: false }
+            { name: "Applying for UGC Developer",  value: "We’re always looking for active and experienced UGC creators.\n\nOpen a ticket and share your portfolio!", inline: false }
           ]
         },
         products_info: {
@@ -394,16 +412,17 @@ app.post("/interactions", async (req, res) => {
           title: "Affiliation information",
           description: "Our Affiliation Program lets communities collaborate with Code Red Creations.\n\nOpen a ticket if interested.",
           fields: [
-            { name: "Perks", value: "- UGCs inspired by your community\n- Priority suggestions\n- Exclusive sneak peeks\n- Updates in your Sneak Peeks channel\n- Promotion in our server", inline: true },
-            { name: "Requirements", value: "- Active, community-focused server\n- Promote CRC visibly\n- Allow progress updates in Sneak Peeks\n- Friendly environment\n- Open to collaboration", inline: true }
+            { name: "Perks",         value: "- UGCs inspired by your community\n- Priority suggestions\n- Exclusive sneak peeks\n- Updates in your Sneak Peeks channel\n- Promotion in our server", inline: true },
+            { name: "Requirements",  value: "- Active, community-focused server\n- Promote CRC visibly\n- Allow progress updates in Sneak Peeks\n- Friendly environment\n- Open to collaboration", inline: true }
           ]
         }
       };
+
       const picked = embedByKey[key] ?? { color: 16711422, title: "Unknown", description: "This option is not configured." };
       return res.json({ type: 4, data: { flags: 64, embeds: [picked] } });
     }
 
-    // fallback
+    // 5) Default fallback
     return res.json({ type: 4, data: { flags: 64, content: "Unhandled." } });
   } catch (err) {
     console.error("INT HANDLER ERROR", err);
@@ -412,6 +431,7 @@ app.post("/interactions", async (req, res) => {
     } catch {}
   }
 });
+
 
 /* =========================
    Boot
